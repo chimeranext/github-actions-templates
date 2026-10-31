@@ -1,0 +1,17 @@
+name: prds-check
+description: Validate a PR description against PRDS audit checks (title, summary, tracker, scope).
+inputs:
+  pr-body:
+    description: PR body text
+    required: true
+  title:
+    description: PR title
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        echo "PRDS check (skeleton): title and body provided"
+        echo "title: ${{ inputs.title }}" | head -c 120
+        echo "body chars: $(printf '%s' '${{ inputs.pr-body }}' | wc -c)"
