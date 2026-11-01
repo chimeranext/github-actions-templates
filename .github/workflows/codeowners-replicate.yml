@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Replicate CODEOWNERS SSOT
-        uses: chimeranext/github-actions-templates@main
+        uses: chimeranext/github-actions-templates/codeowners-replicate@main
         with:
           source-org: chimeranext
           source-repo: internal-org-gate

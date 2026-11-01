@@ -1,0 +1,35 @@
+name: prds-check
+description: Deterministic PRDS validation. Fails unless the PR description contains Summary, Tracker, Test plan, and Scope boundaries.
+inputs:
+  pr-body:
+    description: PR body text
+    required: true
+  title:
+    description: PR title
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Validate PRDS
+      shell: bash
+      run: |
+        set -u
+        fail=0
+        body="${{ inputs.pr-body }}"
+        title="${{ inputs.title }}"
+        for section in "## Summary" "## Tracker" "## Test plan" "## Scope boundaries"; do
+          if ! printf '%s' "$body" | grep -qF "$section"; then
+            echo "PRDS missing section: $section"
+            fail=1
+          fi
+        done
+        if [ -z "$title" ]; then echo "PRDS missing title"; fail=1; fi
+        if [ "$fail" -ne 0 ]; then
+          echo "::error::PRDS gate fired. Redraft the PR description (no exceptions)."
+          exit 1
+        fi
+        echo "PRDS OK"
+
+branding:
+  icon: check-circle
+  color: blue

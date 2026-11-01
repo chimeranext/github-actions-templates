@@ -8,7 +8,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: PRDS check
-        uses: chimeranext/github-actions-templates@v1
+        uses: chimeranext/github-actions-templates/prds-check@main
         with:
           title: ${{ github.event.pull_request.title }}
           pr-body: ${{ github.event.pull_request.body }}

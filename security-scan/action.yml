@@ -1,0 +1,63 @@
+name: security-scan
+description: >
+  Standardized security scan composite action: CodeQL (SAST) + Trivy
+  (config/fs/secret). Vendored by assurance-toolkit; reuse in the
+  `security.yml` workflow of any monorepo.
+
+inputs:
+  languages:
+    description: CodeQL languages (comma-separated), e.g. "typescript,javascript".
+    required: true
+  language-category:
+    description: Primary CodeQL language for the analyze category.
+    required: false
+    default: typescript
+  config-scan-ref:
+    description: Path for Trivy config scan (Dockerfile / container config).
+    required: false
+    default: .
+  iac-scan-ref:
+    description: Path for Trivy fs/secret scan (terraform/k8s).
+    required: false
+    default: .
+
+runs:
+  using: composite
+  steps:
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v3
+      with:
+        languages: ${{ inputs.languages }}
+        queries: security-extended
+
+    - name: Autobuild
+      uses: github/codeql-action/autobuild@v3
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v3
+      with:
+        category: "/language:${{ inputs.language-category }}"
+
+    - name: Trivy vulnerability scanner (config)
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: config
+        scan-ref: ${{ inputs.config-scan-ref }}
+        format: table
+        exit-code: "1"
+        ignore-unfixed: true
+        severity: CRITICAL,HIGH
+
+    - name: Trivy Infrastructure as Code (fs/secret)
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: fs
+        scan-ref: ${{ inputs.iac-scan-ref }}
+        scanners: misconfig,secret
+        format: table
+        exit-code: "1"
+        severity: CRITICAL,HIGH
+
+branding:
+  icon: shield
+  color: red
