@@ -1,0 +1,23 @@
+name: codeowners-replicate
+on:
+  workflow_dispatch:        # manual trigger
+  schedule:
+    - cron: "0 6 * * 1"    # weekly Monday 06:00 UTC
+jobs:
+  replicate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Replicate CODEOWNERS SSOT
+        uses: chimeranext/github-actions-templates@main
+        with:
+          source-org: chimeranext
+          source-repo: internal-org-gate
+          source-path: .github/CODEOWNERS
+          team: founders
+          default-branch: main
+          open-pr-if-protected: "true"
+          dry-run: "false"

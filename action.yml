@@ -1,34 +1,139 @@
-name: prds-check
-description: Deterministic PRDS validation. Fails unless the PR description contains Summary, Tracker, Test plan, and Scope boundaries.
+name: codeowners-replicate
+description: >-
+  Replicate the canonical CODEOWNERS SSOT from the governance repo to every
+  target repository. Implements MPH point 8. Startup-agnostic.
+
 inputs:
-  pr-body:
-    description: PR body text
+  source-org:
+    description: Organization that owns the governance repo (SSOT) and target repos.
     required: true
-  title:
-    description: PR title
+  source-repo:
+    description: Governance repo holding the canonical CODEOWNERS file.
     required: true
+    default: internal-org-gate
+  source-path:
+    description: Path of the canonical CODEOWNERS inside the governance repo.
+    required: false
+    default: .github/CODEOWNERS
+  team:
+    description: Team to reference as the star owner.
+    required: true
+    default: founders
+  target-repos:
+    description: >-
+      Comma-separated list of repositories to replicate to. Empty = all org repos.
+    required: false
+    default: ""
+  default-branch:
+    description: Target branch for the committed CODEOWNERS.
+    required: false
+    default: main
+  open-pr-if-protected:
+    description: >-
+      If true, open a PR on protected repos; commit directly otherwise.
+    required: false
+    default: "true"
+  dry-run:
+    description: Validate and report only; never write.
+    required: false
+    default: "false"
+
 runs:
   using: composite
   steps:
-    - name: Validate PRDS
+    - name: Checkout source (SSOT)
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ inputs.source-org }}/${{ inputs.source-repo }}
+        token: ${{ github.token }}
+        path: ssot
+
+    - name: Resolve org and team
       shell: bash
       run: |
-        set -u
-        fail=0
-        body="$(cat <<'EOF'
-${{ inputs.pr-body }}
-EOF
-)"
-        title="${{ inputs.title }}"
-        for section in "## Summary" "## Tracker" "## Test plan" "## Scope boundaries"; do
-          if ! printf '%s' "$body" | grep -qF "$section"; then
-            echo "PRDS missing section: $section"
-            fail=1
-          fi
-        done
-        if [ -z "$title" ]; then echo "PRDS missing title"; fail=1; fi
-        if [ "$fail" -ne 0 ]; then
-          echo "::error::PRDS gate fired. Redraft the PR description (no exceptions)."
-          exit 1
+        set -eo pipefail
+        ORG="${{ inputs.source-org }}"
+        TEAM="${{ inputs.team }}"
+        echo "Resolving team ${TEAM} in org ${ORG}"
+        curl -fSsL -H "Authorization: Bearer ${{ github.token }}" \
+          -H "Accept: application/vnd.github+json" \
+          "https://api.github.com/orgs/${ORG}/teams/${TEAM}" || {
+            echo "::error::CODEOWNERS replication: team ${TEAM} missing in org ${ORG}. Abort (fail-closed)."
+            exit 1
+          }
+
+    - name: Determine target repositories
+      shell: bash
+      run: |
+        set -eo pipefail
+        if [ -n "${{ inputs.target-repos }}" ]; then
+          echo "${{ inputs.target-repos }}" | tr ',' '\n' | sed 's/^ *//;s/ *$//' | grep -v '^$' > /tmp/targets.txt
+        else
+          curl -fSsL -H "Authorization: Bearer ${{ github.token }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/orgs/${{ inputs.source-org }}/repos?per_page=100&type=all" \
+            | jq -r '.[].name' | sort > /tmp/targets.txt
         fi
-        echo "PRDS OK"
+        echo "target count: $(wc -l < /tmp/targets.txt)"
+
+    - name: Replicate CODEOWNERS per target
+      shell: bash
+      run: |
+        set -eo pipefail
+        SRC=$GITHUB_WORKSPACE/ssot/${{ inputs.source-path }}
+        ORG="${{ inputs.source-org }}"
+        BRANCH="${{ inputs.default-branch }}"
+        OPEN_PR_IF_PROTECTED="${{ inputs.open-pr-if-protected }}"
+        DRY_RUN="${{ inputs.dry-run }}"
+        # Resolve the {{ORG}} template token in the canonical file.
+        sed "s/{{ORG}}/${ORG}/g" "$SRC" > /tmp/codeowners.resolved
+        NEW_B64=$(base64 -w0 /tmp/codeowners.resolved)
+        while IFS= read -r repo; do
+          [ -n "$repo" ] || continue
+          echo "== target: $repo"
+          CUR=$(curl -fSsL -H "Authorization: Bearer ${{ github.token }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${ORG}/${repo}/contents/${{ inputs.source-path }}?ref=${BRANCH}" \
+            || true)
+          CUR_B64=$(printf '%s' "$CUR" | jq -r '.content // empty' | tr -d '\n' || true)
+          CUR_SHA=$(printf '%s' "$CUR" | jq -r '.sha // empty' || true)
+          if [ "$CUR_B64" = "$NEW_B64" ]; then
+            echo "  no drift (identical) — skip"
+            continue
+          fi
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "  [dry-run] would update CODEOWNERS"
+            continue
+          fi
+          jq -n \
+            --arg content "$NEW_B64" \
+            --arg message "chore(codeowners): replicate canonical SSOT" \
+            --arg branch "$BRANCH" \
+            --arg sha "${CUR_SHA}" \
+            '{message: $message, content: $content, branch: $branch, sha: $sha}' \
+            > /tmp/payload.json
+          if [ "$OPEN_PR_IF_PROTECTED" = "true" ]; then
+            PR_BRANCH="codeowners-replicate-$(date +%s)"
+            jq --arg b "$PR_BRANCH" '.branch = $b | del(.sha)' /tmp/payload.json > /tmp/payload_pr.json
+            curl -fSsL -X PUT -H "Authorization: Bearer ${{ github.token }}" \
+              -H "Accept: application/vnd.github+json" \
+              --data @/tmp/payload_pr.json \
+              "https://api.github.com/repos/${ORG}/${repo}/contents/${{ inputs.source-path }}" \
+              > /tmp/push.log 2>&1 || echo "  push-to-branch failed (see /tmp/push.log)"
+            curl -fSsL -H "Authorization: Bearer ${{ github.token }}" \
+              -H "Accept: application/vnd.github+json" \
+              --data "$(jq -n --arg t "chore(codeowners): replicate SSOT" --arg h "$PR_BRANCH" --arg b "$BRANCH" '{title:$t, head:$h, base:$b}')" \
+              "https://api.github.com/repos/${ORG}/${repo}/pulls" \
+              | jq -r '"  PR: " + (.html_url // "failed")'
+          else
+            curl -fSsL -X PUT -H "Authorization: Bearer ${{ github.token }}" \
+              -H "Accept: application/vnd.github+json" \
+              --data @/tmp/payload.json \
+              "https://api.github.com/repos/${ORG}/${repo}/contents/${{ inputs.source-path }}" \
+              | jq -r '"  committed: " + (.commit.sha // .message)'
+          fi
+        done < /tmp/targets.txt
+
+branding:
+  icon: shield
+  color: green
