@@ -20,6 +20,10 @@ inputs:
     description: Path for Trivy fs/secret scan (terraform/k8s).
     required: false
     default: .
+  dependency-scan-ref:
+    description: Path for dependency scan (npm/composer/bun). Empty = skip.
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -57,6 +61,16 @@ runs:
         format: table
         exit-code: "1"
         severity: CRITICAL,HIGH
+
+    - name: Dependency scan (npm audit)
+      if: inputs.dependency-scan-ref != ''
+      shell: bash
+      run: |
+        set -eo pipefail
+        if [ -f "${{ inputs.dependency-scan-ref }}/package.json" ]; then
+          cd "${{ inputs.dependency-scan-ref }}"
+          npm audit --audit-level=high || echo "::warning::npm audit found high-severity vulnerabilities (advisory)"
+        fi
 
 branding:
   icon: shield
