@@ -24,6 +24,14 @@ inputs:
     description: Path for dependency scan (npm/composer/bun). Empty = skip.
     required: false
     default: ""
+  sbom:
+    description: Generate CycloneDX SBOM (advisory). true/false.
+    required: false
+    default: "false"
+  dast-url:
+    description: Target URL for OWASP ZAP baseline DAST (advisory). Empty = skip.
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -71,6 +79,22 @@ runs:
           cd "${{ inputs.dependency-scan-ref }}"
           npm audit --audit-level=high || echo "::warning::npm audit found high-severity vulnerabilities (advisory)"
         fi
+
+    # --- Advisory scans (SBOM / DAST) — do not block the merge. ---
+    - name: SBOM (CycloneDX, advisory)
+      if: inputs.sbom == 'true'
+      continue-on-error: true
+      uses: anchore/sbom-action@v0
+      with:
+        path: .
+        format: cyclonedx-json
+
+    - name: DAST (OWASP ZAP baseline, advisory)
+      if: inputs.dast-url != ''
+      continue-on-error: true
+      uses: zaproxy/action-baseline@v0.15.0
+      with:
+        target: ${{ inputs.dast-url }}
 
 branding:
   icon: shield
